@@ -22,6 +22,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.adempiere.ad.dao.IQueryBL;
 import org.adempiere.ad.trx.api.ITrxManager;
 import org.adempiere.ad.trx.api.OnTrxMissingPolicy;
 import org.adempiere.exceptions.AdempiereException;
@@ -1130,11 +1131,10 @@ public class ESRImportBL implements IESRImportBL
 		// We start by collecting the C_Payment_IDs from our lines
 		final Set<Integer> linesOwnPaymentIDs = new HashSet<>();
 		for (final I_ESR_ImportLine importLine : linesWithSameInvoice)
-		{			
+		{
 			final PaymentId importLinePaymentId = PaymentId.ofRepoIdOrNull(importLine.getC_Payment_ID());
 			final I_C_Payment importLinePayment = importLinePaymentId == null ? null
 					: paymentDAO.getById(importLinePaymentId);
-			
 
 			// if the invoice is paid with the current line, exclude it from computing
 			if (importLinePayment != null && paymentBL.isMatchInvoice(importLinePayment, invoice))
@@ -1269,10 +1269,20 @@ public class ESRImportBL implements IESRImportBL
 	@Override
 	public void unlinkESRImportLinesFromBankStatement(@NonNull final Collection<BankStatementLineId> bankStatementLineIds)
 	{
-		for (final I_ESR_ImportLine esrImportLine : esrImportDAO.retrieveAllLinesByBankStatementLineIds(bankStatementLineIds))
+		final List<I_ESR_ImportLine> esrImportLines = esrImportDAO.retrieveAllLinesByBankStatementLineIds(bankStatementLineIds);
+
+		if (esrImportLines.isEmpty())
+		{
+			return;
+		}
+
+		for (final I_ESR_ImportLine esrImportLine : esrImportLines)
 		{
 			unlinkESRImportLineFromBankStatement(esrImportLine);
 		}
+
+		final ImmutableSet<ESRImportId> esrImportIds = extractESRImportIds(esrImportLines);
+		updateESRImportReconciledStatus(esrImportIds);
 	}
 
 	@Override
@@ -1306,8 +1316,10 @@ public class ESRImportBL implements IESRImportBL
 
 		final Set<PaymentId> paymentIds = bankStatementLineRefIdIndexByPaymentId.keySet();
 
+		final List<I_ESR_ImportLine> esrImportLines = esrImportDAO.retrieveLines(paymentIds);
+
 		final ImmutableMap<PaymentId, I_ESR_ImportLine> paySelectionLinesByPaymentId = Maps.uniqueIndex(
-				esrImportDAO.retrieveLines(paymentIds),
+				esrImportLines,
 				esrImportLine -> PaymentId.ofRepoId(esrImportLine.getC_Payment_ID()));
 
 		for (final Map.Entry<PaymentId, I_ESR_ImportLine> e : paySelectionLinesByPaymentId.entrySet())
@@ -1317,6 +1329,46 @@ public class ESRImportBL implements IESRImportBL
 			final BankStatementAndLineAndRefId bankStatementLineRefId = bankStatementLineRefIdIndexByPaymentId.get(paymentId);
 
 			linkESRImportLineToBankStatement(esrImportLine, bankStatementLineRefId);
+		}
+
+		final ImmutableSet<ESRImportId> esrImportIds = extractESRImportIds(esrImportLines);
+		updateESRImportReconciledStatus(esrImportIds);
+	}
+
+	private static ImmutableSet<ESRImportId> extractESRImportIds(@NonNull final List<I_ESR_ImportLine> esrImportLines)
+	{
+		return esrImportLines.stream()
+				.map(esrImportLine -> ESRImportId.ofRepoId(esrImportLine.getESR_Import_ID()))
+				.collect(ImmutableSet.toImmutableSet());
+	}
+
+	@VisibleForTesting
+	void updateESRImportReconciledStatus(@NonNull final Set<ESRImportId> esrImportIds)
+	{
+		if (esrImportIds.isEmpty())
+		{
+			// shall NOT happen
+			return;
+		}
+
+		final ImmutableSet<ESRImportId> notReconciledESRImportIds = Services.get(IQueryBL.class)
+				.createQueryBuilder(I_ESR_ImportLine.class)
+				.addOnlyActiveRecordsFilter()
+				.addInArrayFilter(I_ESR_ImportLine.COLUMNNAME_ESR_Import_ID, esrImportIds)
+				.addEqualsFilter(I_ESR_ImportLine.COLUMNNAME_C_BankStatement_ID, null) // not reconciled
+				.create()
+				.listDistinct(I_ESR_ImportLine.COLUMNNAME_ESR_Import_ID, Integer.class)
+				.stream()
+				.map(ESRImportId::ofRepoId)
+				.collect(ImmutableSet.toImmutableSet());
+
+		for (final I_ESR_Import esrImport : esrImportDAO.getByIds(esrImportIds))
+		{
+			final ESRImportId esrImportnId = ESRImportId.ofRepoId(esrImport.getESR_Import_ID());
+			final boolean isReconciled = !notReconciledESRImportIds.contains(esrImportnId);
+
+			esrImport.setIsReconciled(isReconciled);
+			esrImportDAO.save(esrImport);
 		}
 	}
 

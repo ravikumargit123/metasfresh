@@ -31,6 +31,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
@@ -95,6 +96,21 @@ public class ESRImportDAO implements IESRImportDAO
 	public void save(@NonNull final I_ESR_ImportLine esrImportLine)
 	{
 		saveRecord(esrImportLine);
+	}
+	
+	@Override
+	public List<I_ESR_Import> getByIds(@NonNull final Set<ESRImportId> esrImportIds)
+	{
+		if (esrImportIds.isEmpty())
+		{
+			return ImmutableList.of();
+		}
+
+		return queryBL.createQueryBuilder(I_ESR_Import.class)
+				.addOnlyActiveRecordsFilter()
+				.addInArrayFilter(I_ESR_Import.COLUMNNAME_ESR_Import_ID, esrImportIds)
+				.create()
+				.list();
 	}
 
 	@Override
