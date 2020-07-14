@@ -7,6 +7,7 @@ import {
 } from '../api';
 import { getTableId } from '../reducers/tables';
 import { getView } from '../reducers/viewHandler';
+import { updateRawModal } from './WindowActions';
 
 import {
   ADD_VIEW_LOCATION_DATA,
@@ -278,6 +279,8 @@ export function fetchDocument({
     })
       .then((response) => {
         dispatch(fetchDocumentSuccess(identifier, response.data));
+        // we need to update rawModal.viewId in here with the new viewId
+        dispatch(updateRawModal(windowType, { viewId }));
 
         const tableId = getTableId({ windowId: windowType, viewId });
         const tableData = { windowType, viewId, ...response.data };
